@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+from leafletfa_utils.atsemapper.main import run_atsemapper
+
+if __name__ == "__main__":
+    run_atsemapper()
