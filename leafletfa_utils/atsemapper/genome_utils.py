@@ -2,10 +2,11 @@
 import os
 import time
 import sqlite3
-import logging
 from typing import Dict
-from pyfaidx import Fasta # type: ignore
-import gffutils # type: ignore
+from pyfaidx import Fasta 
+import gffutils 
+import pandas as pd 
+from tqdm import tqdm 
 
 class GenomeDB:
     def __init__(self, db_name: str, gtf_file: str = None, fasta_file: str = None, max_retries: int = 3):
@@ -156,7 +157,7 @@ class JunctionAnalyzer:
                 gene_info[t.id] = {
                     'gene_id': gene.id,
                     'gene_name': gene.attributes.get('gene_name', [None])[0],
-                     'gene_type': gene.attributes.get('gene_biotype', 
+                    'gene_type': gene.attributes.get('gene_biotype', 
                                   gene.attributes.get('gene_type', [None]))[0]
                 }
 
@@ -184,6 +185,8 @@ class JunctionAnalyzer:
                 transcript_types_junc = set()
                 genes_found = set()
                 gene_types_found = set()  # New: Track gene types
+                transcripts_junc_5 = set()
+                transcripts_junc_3 = set()
 
                 for transcript in transcripts:
                     exons = exon_cache[transcript.id]
@@ -196,6 +199,8 @@ class JunctionAnalyzer:
                             if abs(exon.end - start) <= self.tolerance:
                                 label_5_prime = "annotated on 5'"
                                 position_off_5_prime = exon.end - start
+                                transcripts_junc_5.add(transcript.id)
+                                found_5_prime = True
                                 break 
                         # Check 3' end (end position)
                         for exon in exons:
@@ -203,6 +208,7 @@ class JunctionAnalyzer:
                                 label_3_prime = "annotated on 3'"
                                 position_off_3_prime = exon.start - end
                                 found_3_prime = True
+                                transcripts_junc_3.add(transcript.id)
                                 break
                     else: # strand == "-"
                         # Check 5' end (end position for negative strand)
@@ -210,6 +216,7 @@ class JunctionAnalyzer:
                             if abs(exon.start - end) <= self.tolerance:
                                 label_5_prime = "annotated on 5'"
                                 position_off_5_prime = exon.start - end
+                                transcripts_junc_5.add(transcript.id)
                                 found_5_prime = True
                                 break
 
@@ -219,6 +226,7 @@ class JunctionAnalyzer:
                                 label_3_prime = "annotated on 3'"
                                 position_off_3_prime = exon.end - start
                                 found_3_prime = True
+                                transcripts_junc_3.add(transcript.id)
                                 break
 
                     # Add gene and transcript info if any end matches
@@ -254,6 +262,8 @@ class JunctionAnalyzer:
                     "transcript_types": list(transcript_types_junc),
                     "gene_ids": [g[0] for g in genes_found],
                     "gene_names": [g[1] for g in genes_found],
+                    "transcripts_junc_5": list(transcripts_junc_5),
+                    "transcripts_junc_3": list(transcripts_junc_3),
                     "gene_types": list(gene_types_found)  # Added gene types to output
                 })
 

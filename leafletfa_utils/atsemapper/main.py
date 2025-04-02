@@ -5,11 +5,12 @@ import logging
 from pathlib import Path
 import time
 import datetime
+import os
+import datetime
 
 from .junction_parser import JunctionReader
 from .event_detection import ATSEAnalyzer
 from .genome_utils import GenomeDB, JunctionAnalyzer
-from .utils import create_analysis_summary
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="ATSEmapper: Map alternative splicing events from splice junction files")
@@ -17,12 +18,14 @@ def parse_arguments():
     # Required parameters
     parser.add_argument("--input", required=True, 
                         help="Directory containing junction files or path to a file listing junction files")
-    parser.add_argument("--output", required=True, 
-                        help="Directory where output files will be saved")
+    parser.add_argument("--output", required=False, default=None,
+                        help="Directory where output files will be saved (default: LeafletFA_ATSE_mapper_output_DATE)")
     parser.add_argument("--annotation", required=True, 
                         help="GTF/GFF3 file with genome annotation")
     parser.add_argument("--genome", required=True, 
                         help="FASTA file with genome sequence")
+    parser.add_argument("--db_path", required=False, default=None,
+                        help="Path to SQLite database for genome annotation (default: {output}/annotation.db)")
     
     # Junction filtering options
     parser.add_argument("--min-intron", type=int, default=50, 
@@ -62,14 +65,31 @@ def parse_arguments():
     parser.add_argument("--verbose", action="store_true", 
                         help="Print verbose output")
     
-    return parser.parse_args()
+    args = parser.parse_args()
+    
+    # Handle output directory creation if not specified
+    if not args.output:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        args.output = f"LeafletFA_ATSE_mapper_output_{timestamp}"
+        print(f"No output directory specified. Using: {args.output}")
+
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output, exist_ok=True)
+    return args
 
 def run_atsemapper(args=None):
     """Main entry point for ATSEmapper"""
+    
     # Parse arguments if not provided
     if args is None:
         args = parse_arguments()
-    
+    else: 
+        # Handle the case when args is an object but output might be None
+        if not getattr(args, 'output', None):
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            args.output = f"LeafletFA_ATSE_mapper_output_{timestamp}"
+            print(f"No output directory specified. Using: {args.output}")
+            
     # Create output directory if it doesn't exist
     os.makedirs(args.output, exist_ok=True)
     
@@ -90,8 +110,23 @@ def run_atsemapper(args=None):
     logging.info(f"Starting ATSEmapper with parameters: {vars(args)}")
     
     # Initialize genome database
-    db_path = os.path.join(args.output, "annotation.db")
-    logging.info(f"Initializing genome database at {db_path}")
+    # Check if db_path is provided, if not use default 
+    if args.db_path:
+        db_path = args.db_path
+        # Ensure file actually exists
+        if not os.path.exists(db_path):
+            logging.error(f"Database path {db_path} does not exist.")
+            raise FileNotFoundError(f"Database path {db_path} does not exist.")
+    else:
+        # Create a default path for the database in the output directory
+        db_path = os.path.join(args.output, "annotation.db")
+        # Check if the database already exists
+        if os.path.exists(db_path):
+            logging.warning(f"Database already exists at {db_path}. Using existing database.")
+        else:
+            # Create the database if it doesn't exist
+            logging.info(f"Creating new database at {db_path}")
+
     genome_db = GenomeDB(db_path, args.annotation, args.genome)
     
     # Get list of junction files
@@ -196,16 +231,8 @@ def run_atsemapper(args=None):
     today = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     output_file = os.path.join(args.output, f"atse_events_{today}.tsv.gz")
     logging.info(f"Saving ATSE events to {output_file}")
-    atse_analyzer.save_atse_file(classified_events, annotation_filtered, output_file)
-    
-    # Create analysis summary
-    logging.info("Creating analysis summary")
-    summary = create_analysis_summary(reader, len(junction_files), annotation_filtered)
-    summary_file = os.path.join(args.output, f"analysis_summary_{today}.csv")
-    summary.to_csv(summary_file, index=False)
-    
+    atse_analyzer.save_atse_file(classified_events, annotation_filtered, output_file)    
     logging.info("ATSEmapper completed successfully")
-    
     return output_file
 
 def main():
