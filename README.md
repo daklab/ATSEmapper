@@ -100,7 +100,7 @@ python test_installation.py
 
 ### Dependencies
 
-- Python ≥ 3.8
+- Python ≥ 3.10
 - NumPy
 - Pandas
 - Matplotlib

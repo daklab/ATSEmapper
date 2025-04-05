@@ -152,41 +152,43 @@ class JunctionAnalyzer:
 
             # Get gene info and transcripts
             gene_info = {}
+            transcript_types = {}
             for t in transcripts:
+                # Get transcript type
+                transcript_types[t.id] = t.attributes.get('transcript_type', [None])[0]
+            
+                # Get gene info
                 gene = list(self.db.parents(t, featuretype="gene"))[0]
                 gene_info[t.id] = {
                     'gene_id': gene.id,
                     'gene_name': gene.attributes.get('gene_name', [None])[0],
                     'gene_type': gene.attributes.get('gene_biotype', 
-                                  gene.attributes.get('gene_type', [None]))[0]
+                              gene.attributes.get('gene_type', [None]))[0]
                 }
 
-            # Get trancsript types 
-            transcript_types = {}
-            for t in transcripts:
-                transcript_types[t.id] = t.attributes.get('transcript_type', [None])[0]
-
+            print(f"Starting to process chromosome {chrom} with {len(junc_group)} junctions and {len(transcripts)} potential transcripts")
             # Process each junction
-            for j_id, junction in tqdm(junc_group, desc="Processing junctions"):
+            for j_id, junction in junc_group:
                 start = junction["start"]
                 end = junction["end"]
                 strand = junction["strand"]
 
-                # Initialize overall annotation labels
-                label_5_prime, label_3_prime = "unannotated on 5'", "unannotated on 3'"
-                position_off_5_prime, position_off_3_prime = None, None
-
-                # Initialize transcript categorization
+                # Initialize collections for transcript matching
+                transcripts_junc_5 = set()
+                transcripts_junc_3 = set()
                 both_ends_transcripts = set()
                 only_5_prime_transcripts = set()
                 only_3_prime_transcripts = set()
 
-                # Track overall for all transcripts
+                # Track gene and transcript info
                 transcript_types_junc = set()
                 genes_found = set()
-                gene_types_found = set()  # New: Track gene types
-                transcripts_junc_5 = set()
-                transcripts_junc_3 = set()
+                gene_types_found = set()
+
+                # Track best position offsets (closest to 0)
+                # None means not found, perfect_match is for quick filtering later
+                five_prime_data = {'offset': None, 'perfect_matches': []}
+                three_prime_data = {'offset': None, 'perfect_matches': []}
 
                 for transcript in transcripts:
                     exons = exon_cache[transcript.id]
@@ -196,37 +198,67 @@ class JunctionAnalyzer:
                     if strand == "+":
                         # Check 5' end (start position)
                         for exon in exons:
-                            if abs(exon.end - start) <= self.tolerance:
-                                label_5_prime = "annotated on 5'"
-                                position_off_5_prime = exon.end - start
+                            offset = exon.end - start
+                            if abs(offset) <= self.tolerance:
+                                # Track for best offset
+                                if five_prime_data['offset'] is None or abs(offset) < abs(five_prime_data['offset']):
+                                    five_prime_data['offset'] = offset
+
+                                # Track perfect matches (0 or 1 offset)
+                                if 0 <= offset <= 1:
+                                    five_prime_data['perfect_matches'].append(transcript.id)
+
                                 transcripts_junc_5.add(transcript.id)
                                 found_5_prime = True
                                 break 
+
                         # Check 3' end (end position)
                         for exon in exons:
-                            if abs(exon.start - end) <= self.tolerance:
-                                label_3_prime = "annotated on 3'"
-                                position_off_3_prime = exon.start - end
-                                found_3_prime = True
+                            offset = exon.start - end
+                            if abs(offset) <= self.tolerance:
+                                # Track for best offset
+                                if three_prime_data['offset'] is None or abs(offset) < abs(three_prime_data['offset']):
+                                    three_prime_data['offset'] = offset
+
+                                # Track perfect matches (0 or 1 offset)
+                                if 0 <= offset <= 1:
+                                    three_prime_data['perfect_matches'].append(transcript.id)
+
                                 transcripts_junc_3.add(transcript.id)
+                                found_3_prime = True
                                 break
+
                     else: # strand == "-"
                         # Check 5' end (end position for negative strand)
                         for exon in exons:
-                            if abs(exon.start - end) <= self.tolerance:
-                                label_5_prime = "annotated on 5'"
-                                position_off_5_prime = exon.start - end
+                            offset = exon.start - end
+                            if abs(offset) <= self.tolerance:
+                                # Track for best offset
+                                if five_prime_data['offset'] is None or abs(offset) < abs(five_prime_data['offset']):
+                                    five_prime_data['offset'] = offset
+
+                                # Track perfect matches (0 or 1 offset)
+                                if 0 <= offset <= 1:
+                                    five_prime_data['perfect_matches'].append(transcript.id)
+
                                 transcripts_junc_5.add(transcript.id)
                                 found_5_prime = True
                                 break
 
                         # Check 3' end (start position for negative strand)
                         for exon in exons:
-                            if abs(exon.end - start) <= self.tolerance:
-                                label_3_prime = "annotated on 3'"
-                                position_off_3_prime = exon.end - start
-                                found_3_prime = True
+                            offset = exon.end - start
+                            if abs(offset) <= self.tolerance:
+                                # Track for best offset
+                                if three_prime_data['offset'] is None or abs(offset) < abs(three_prime_data['offset']):
+                                    three_prime_data['offset'] = offset
+
+                                # Track perfect matches (0 or 1 offset)
+                                if 0 <= offset <= 1:
+                                    three_prime_data['perfect_matches'].append(transcript.id)
+
                                 transcripts_junc_3.add(transcript.id)
+                                found_3_prime = True
                                 break
 
                     # Add gene and transcript info if any end matches
@@ -247,15 +279,18 @@ class JunctionAnalyzer:
                     elif found_3_prime:
                         only_3_prime_transcripts.add(transcript.id)
 
-                # Get all transcripts that match at least one end
-                all_matching_transcripts = both_ends_transcripts.union(only_5_prime_transcripts, only_3_prime_transcripts)
+                # Set annotation labels based on whether matches were found
+                label_5_prime = "annotated on 5'" if transcripts_junc_5 else "unannotated on 5'"
+                label_3_prime = "annotated on 3'" if transcripts_junc_3 else "unannotated on 3'"
 
+                # Update junction with all collected information
                 junction.update({
                     "label_5_prime": label_5_prime,
                     "label_3_prime": label_3_prime,
-                    "position_off_5_prime": position_off_5_prime,
-                    "position_off_3_prime": position_off_3_prime,
-                    "transcripts": list(all_matching_transcripts),
+                    "position_off_5_prime": five_prime_data['offset'],
+                    "position_off_3_prime": three_prime_data['offset'],
+                    "perfect_match_5_prime": five_prime_data['perfect_matches'],
+                    "perfect_match_3_prime": three_prime_data['perfect_matches'],
                     "both_ends_transcripts": list(both_ends_transcripts),
                     "only_5_prime_transcripts": list(only_5_prime_transcripts),
                     "only_3_prime_transcripts": list(only_3_prime_transcripts),
@@ -264,7 +299,7 @@ class JunctionAnalyzer:
                     "gene_names": [g[1] for g in genes_found],
                     "transcripts_junc_5": list(transcripts_junc_5),
                     "transcripts_junc_3": list(transcripts_junc_3),
-                    "gene_types": list(gene_types_found)  # Added gene types to output
+                    "gene_types": list(gene_types_found)
                 })
 
         return junctions
@@ -272,7 +307,7 @@ class JunctionAnalyzer:
     def filter_annotated(self, junctions: Dict[str, Dict], annotation_status_include: str = 'both') -> Dict[str, Dict]:
         """
         Filter junctions based on annotation status.
-    
+
         Args:
             junctions: Dictionary of junctions
             annotation_status_include: Filtering option for junctions
@@ -301,23 +336,16 @@ class JunctionAnalyzer:
 
         # Process each junction
         for j_id, j_data in junctions.items():
-            
-            # Initialize flags
-            five_prime = False
-            three_prime = False
 
-            # Check position off for 5' and 3' ends if not None
-            if j_data["position_off_5_prime"] is not None:
-                five_prime = (0 <= j_data["position_off_5_prime"] <= 1)
-
-            if j_data["position_off_3_prime"] is not None:
-                three_prime = (0 <= j_data["position_off_3_prime"] <= 1)
-    
             # Handle multi-gene junctions
             if len(j_data["gene_ids"]) > 1:
                 annotation_stats["multi_gene"] += 1
                 multi_gene_junctions[j_id] = j_data
                 continue
+
+            # Check if we have perfect matches (0 or 1 offset) for each end
+            five_prime = len(j_data.get("perfect_match_5_prime", [])) > 0
+            three_prime = len(j_data.get("perfect_match_3_prime", [])) > 0
 
             # Categorize junction
             if five_prime and three_prime:
@@ -348,7 +376,7 @@ class JunctionAnalyzer:
                 filtered_junctions[j_id] = j_data
 
         filtered_count = len(filtered_junctions)
-        
+
         # Save multi-gene junctions to file
         if multi_gene_junctions:
             multi_gene_file = f'multi_gene_junctions_{time.strftime("%Y%m%d-%H%M%S")}.csv'

@@ -496,6 +496,7 @@ class ATSEAnalyzer:
             file_name: Output file path (will append .gz if not present)
         """
         import gzip
+        from collections import defaultdict
 
         required_fields = {'gene_id', 'num_junctions', 'event_type', 'junction_ids'}
 
@@ -503,123 +504,140 @@ class ATSEAnalyzer:
         if not file_name.endswith('.gz'):
             file_name = file_name + '.gz'
 
+        # Define column groups to make the code more maintainable
+        event_columns = [
+            "event_id", "gene_id", "gene_name", "gene_types",
+            "num_junctions", "event_type"
+        ]
+    
+        transcript_columns = [
+            "transcripts", "both_ends_transcripts", "only_5_prime_transcripts", 
+            "only_3_prime_transcripts", "transcript_types", "annotation_status",
+            "perfect_match_5_prime", "perfect_match_3_prime"  # Added new fields
+        ]
+
+        junction_columns = [
+            "junction_id", "chrom", "start", "end", "strand", "cells", "total_score"
+        ]
+
+        usage_columns = [
+            "five_prime_usage", "three_prime_usage", "donor_usage", "acceptor_usage",
+            "donor_total_reads", "acceptor_total_reads"
+        ]
+
+        sequence_columns = [
+            "splice_motif", "donor_seq", "acceptor_seq"
+        ]
+
+        position_columns = [
+            "position_off_5_prime", "position_off_3_prime"
+        ]
+
+        # Combine all columns
+        all_columns = event_columns + transcript_columns + junction_columns + usage_columns + sequence_columns + position_columns
+
+        # Track statistics
+        stats = defaultdict(int)
+    
         try:
             with gzip.open(file_name, 'wt') as f:  # 'wt' for write text mode
                 # Write header
-                f.write("event_id\tgene_id\tgene_name\tgene_types\t"
-                   "transcripts\tboth_ends_transcripts\tonly_5_prime_transcripts\tonly_3_prime_transcripts\t"
-                   "transcript_types\tnum_junctions\tevent_type\tannotation_status\t"
-                   "junction_id\tchrom\tstart\tend\tstrand\tcells\ttotal_score\t"
-                   "five_prime_usage\tthree_prime_usage\tdonor_usage\tacceptor_usage\t"
-                   "donor_total_reads\tacceptor_total_reads\t"  # New columns
-                   "splice_motif\tdonor_seq\tacceptor_seq\t"
-                   "position_off_5_prime\tposition_off_3_prime\n")
-
+                f.write("\t".join(all_columns) + "\n")
+    
                 # Write data
                 for event_id, group in atse_groups.items():
                     # Verify all required fields are present
                     missing_fields = required_fields - set(group.keys())
                     if missing_fields:
                         print(f"Warning: Event {event_id} missing required fields: {missing_fields}")
+                        stats["missing_fields"] += 1
                         continue
                     
                     # Get junction usage data if available
                     junction_usage = group.get('junction_usage', {})
-
+    
                     try:
                         # For each junction in the ATSE
                         for junction_id in group['junction_ids']:
                             if junction_id not in junctions:
                                 print(f"Warning: Junction {junction_id} not found in annotations")
+                                stats["missing_junctions"] += 1
                                 continue
-
+                            
                             j_data = junctions[junction_id]
-
-                            # Get usage values for this junction
-                            usage_data = junction_usage.get(junction_id, {})
-                            five_prime_usage = usage_data.get('five_prime_usage', 'NA')
-                            three_prime_usage = usage_data.get('three_prime_usage', 'NA')
-                            donor_usage = usage_data.get('donor_usage', 'NA')
-                            acceptor_usage = usage_data.get('acceptor_usage', 'NA')
-
-                            # Get donor and acceptor total reads
-                            donor_total_reads = usage_data.get('donor_total_reads', 'NA')
-                            acceptor_total_reads = usage_data.get('acceptor_total_reads', 'NA')
-
-                            # Format usage values
-                            five_prime_usage_str = f"{five_prime_usage:.4f}" if isinstance(five_prime_usage, float) else 'NA'
-                            three_prime_usage_str = f"{three_prime_usage:.4f}" if isinstance(three_prime_usage, float) else 'NA'
-                            donor_usage_str = f"{donor_usage:.4f}" if isinstance(donor_usage, float) else 'NA'
-                            acceptor_usage_str = f"{acceptor_usage:.4f}" if isinstance(acceptor_usage, float) else 'NA'
-
-                            # Format total reads values
-                            donor_total_reads_str = f"{donor_total_reads}" if isinstance(donor_total_reads, (int, float)) else 'NA'
-                            acceptor_total_reads_str = f"{acceptor_total_reads}" if isinstance(acceptor_total_reads, (int, float)) else 'NA'
-
+                            stats["junctions_written"] += 1
+    
+                            # Prepare row data
+                            row_data = {}
+                            
+                            # Event data
+                            row_data["event_id"] = event_id
+                            row_data["gene_id"] = group['gene_id']
+                            
                             # Handle gene names - join with pipe if multiple names exist
                             gene_names = j_data.get('gene_names', [])
-                            gene_names_str = '|'.join(str(name) for name in gene_names) if gene_names else 'NA'
-
-                            # Handle gene types - new column
+                            row_data["gene_name"] = '|'.join(str(name) for name in gene_names) if gene_names else 'NA'
+                            
+                            # Handle gene types
                             gene_types = j_data.get('gene_types', [])
-                            gene_types_str = '|'.join(str(gtype) for gtype in gene_types) if gene_types else 'NA'
-
-                            # Handle transcripts - join with comma or return NA if empty
-                            transcripts = j_data.get('transcripts', [])
-                            transcripts_str = ','.join(str(t) for t in transcripts) if transcripts else 'NA'
-
-                            # Handle the three transcript categories - new columns
-                            both_ends = j_data.get('both_ends_transcripts', [])
-                            both_ends_str = ','.join(str(t) for t in both_ends) if both_ends else 'NA'
-
-                            only_5_prime = j_data.get('only_5_prime_transcripts', [])
-                            only_5_prime_str = ','.join(str(t) for t in only_5_prime) if only_5_prime else 'NA'
-
-                            only_3_prime = j_data.get('only_3_prime_transcripts', [])
-                            only_3_prime_str = ','.join(str(t) for t in only_3_prime) if only_3_prime else 'NA'
-
-                            # Handle transcripts types - join with comma or return NA if empty
+                            row_data["gene_types"] = '|'.join(str(gtype) for gtype in gene_types) if gene_types else 'NA'
+                            
+                            row_data["num_junctions"] = group['num_junctions']
+                            row_data["event_type"] = group['event_type']
+                            
+                            # Transcript data
+                            for field in ["transcripts", "both_ends_transcripts", "only_5_prime_transcripts", 
+                                         "only_3_prime_transcripts", "perfect_match_5_prime", "perfect_match_3_prime"]:
+                                values = j_data.get(field, [])
+                                row_data[field] = ','.join(str(t) for t in values) if values else 'NA'
+                            
+                            # Transcript types
                             transcript_types = j_data.get('transcript_types', [])
-                            transcript_types_str = ','.join(str(t) for t in transcript_types) if transcript_types else 'NA'
-
-                            # Write line with all information, including new columns
-                            f.write(f"{event_id}\t"
-                               f"{group['gene_id']}\t"
-                               f"{gene_names_str}\t"
-                               f"{gene_types_str}\t"
-                               f"{transcripts_str}\t"
-                               f"{both_ends_str}\t"
-                               f"{only_5_prime_str}\t"
-                               f"{only_3_prime_str}\t"
-                               f"{transcript_types_str}\t"
-                               f"{group['num_junctions']}\t"
-                               f"{group['event_type']}\t"
-                               f"{j_data.get('annotation_status', 'NA')}\t"
-                               f"{junction_id}\t"
-                               f"{j_data.get('chrom', 'NA')}\t"
-                               f"{j_data.get('start', 'NA')}\t"
-                               f"{j_data.get('end', 'NA')}\t"
-                               f"{j_data.get('strand', 'NA')}\t"
-                               f"{j_data.get('cells', 'NA')}\t"
-                               f"{j_data.get('total_score', 'NA')}\t"
-                               f"{five_prime_usage_str}\t"
-                               f"{three_prime_usage_str}\t"
-                               f"{donor_usage_str}\t"
-                               f"{acceptor_usage_str}\t"
-                               f"{donor_total_reads_str}\t"  # New column
-                               f"{acceptor_total_reads_str}\t"  # New column
-                               f"{j_data.get('splice_motif', 'NA')}\t"
-                               f"{j_data.get('donor_seq', 'NA')}\t"
-                               f"{j_data.get('acceptor_seq', 'NA')}\t"
-                               f"{j_data.get('position_off_5_prime', 'NA')}\t"
-                               f"{j_data.get('position_off_3_prime', 'NA')}\n"
-                            )
+                            row_data["transcript_types"] = ','.join(str(t) for t in transcript_types) if transcript_types else 'NA'
+                            
+                            row_data["annotation_status"] = j_data.get('annotation_status', 'NA')
+                            
+                            # Junction data
+                            row_data["junction_id"] = junction_id
+                            for field in ["chrom", "start", "end", "strand", "cells", "total_score"]:
+                                row_data[field] = j_data.get(field, 'NA')
+                            
+                            # Usage data
+                            usage_data = junction_usage.get(junction_id, {})
+                            for field in ["five_prime_usage", "three_prime_usage", "donor_usage", "acceptor_usage"]:
+                                value = usage_data.get(field, 'NA')
+                                row_data[field] = f"{value:.4f}" if isinstance(value, float) else 'NA'
+                            
+                            # Total reads data
+                            for field in ["donor_total_reads", "acceptor_total_reads"]:
+                                value = usage_data.get(field, 'NA')
+                                row_data[field] = f"{value}" if isinstance(value, (int, float)) else 'NA'
+                            
+                            # Sequence data
+                            for field in ["splice_motif", "donor_seq", "acceptor_seq"]:
+                                row_data[field] = j_data.get(field, 'NA')
+                            
+                            # Position data
+                            for field in ["position_off_5_prime", "position_off_3_prime"]:
+                                row_data[field] = j_data.get(field, 'NA')
+                            
+                            # Write the row
+                            f.write("\t".join(str(row_data.get(col, 'NA')) for col in all_columns) + "\n")
+                            
                     except Exception as e:
                         print(f"Warning: Error writing event {event_id}: {str(e)}")
+                        stats["write_errors"] += 1
                         continue
                     
-            print(f"ATSEs successfully saved to {file_name}")
-            print(f"Wrote {len(atse_groups)} ATSE events")
+            # Print statistics
+            print(f"\nATSEs successfully saved to {file_name}")
+            print(f"Wrote {len(atse_groups)} ATSE groups with {stats['junctions_written']} junctions")
+            if stats["missing_fields"] > 0:
+                print(f"Skipped {stats['missing_fields']} events due to missing fields")
+            if stats["missing_junctions"] > 0:
+                print(f"Skipped {stats['missing_junctions']} junctions not found in annotations")
+            if stats["write_errors"] > 0:
+                print(f"Encountered {stats['write_errors']} errors while writing events")
         
         except IOError as e:
             print(f"Error: Could not write to file {file_name}: {str(e)}")
