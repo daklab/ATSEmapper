@@ -157,14 +157,34 @@ class JunctionAnalyzer:
                 # Get transcript type
                 transcript_types[t.id] = t.attributes.get('transcript_type', [None])[0]
             
-                # Get gene info
-                gene = list(self.db.parents(t, featuretype="gene"))[0]
-                gene_info[t.id] = {
-                    'gene_id': gene.id,
-                    'gene_name': gene.attributes.get('gene_name', [None])[0],
-                    'gene_type': gene.attributes.get('gene_biotype', 
-                              gene.attributes.get('gene_type', [None]))[0]
-                }
+                # Try to get gene info from parent gene feature first
+                try:
+                    parents = list(self.db.parents(t, featuretype="gene"))
+                    if parents:
+                        gene = parents[0]
+                        gene_info[t.id] = {
+                            'gene_id': gene.id,
+                            'gene_name': gene.attributes.get('gene_name', [None])[0],
+                            'gene_type': gene.attributes.get('gene_biotype',
+                                     gene.attributes.get('gene_type', [None]))[0]
+                        }
+                    else:
+                        # If no parent gene, get gene info from transcript attributes
+                        gene_info[t.id] = {
+                            'gene_id': t.attributes.get('gene_id', [None])[0],
+                            'gene_name': t.attributes.get('gene_name', [None])[0],
+                            'gene_type': t.attributes.get('gene_biotype',
+                                      t.attributes.get('gene_type', [None]))[0]
+                        }
+
+                except Exception:
+                    # Fallback: get gene info from transcript attributes
+                    gene_info[t.id] = {
+                        'gene_id': t.attributes.get('gene_id', [None])[0],
+                        'gene_name': t.attributes.get('gene_name', [None])[0],
+                        'gene_type': t.attributes.get('gene_biotype',
+                                  t.attributes.get('gene_type', [None]))[0]
+                    }
 
             print(f"Starting to process chromosome {chrom} with {len(junc_group)} junctions and {len(transcripts)} potential transcripts")
             # Process each junction
@@ -191,6 +211,9 @@ class JunctionAnalyzer:
                 three_prime_data = {'offset': None, 'perfect_matches': []}
 
                 for transcript in transcripts:
+                    # Add strand checking - skip if strands don't match
+                    if transcript.strand != strand:
+                        continue
                     exons = exon_cache[transcript.id]
                     found_5_prime = False
                     found_3_prime = False
@@ -266,7 +289,10 @@ class JunctionAnalyzer:
                         if transcript.id in transcript_types:
                             transcript_types_junc.add(transcript_types[transcript.id])
                         if transcript.id in gene_info:
+                            # Get the gene to check its strand
                             gene_data = gene_info[transcript.id]
+                            # Use transcript strand directly instead of trying to get gene strand
+                            # We already verified the transcript strand matches the junction strand
                             genes_found.add((gene_data['gene_id'], gene_data['gene_name']))
                             if gene_data['gene_type']:
                                 gene_types_found.add(gene_data['gene_type'])

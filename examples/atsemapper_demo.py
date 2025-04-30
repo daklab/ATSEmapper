@@ -70,7 +70,7 @@ class Args:
         self.min_splice_site_usage = 0.01   # Min proportion for a splice site
         
         # Testing and debugging parameters
-        self.sample_size = 10               # Randomly sample N junction files
+        self.sample_size = 50               # Randomly sample N junction files
         self.tolerance = 100                # Allowance for matching splice sites (bp)
         self.verbose = True                 # Detailed logging output
         self.log_file = None                # Custom log file path (None = auto)

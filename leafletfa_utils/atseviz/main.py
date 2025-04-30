@@ -7,6 +7,7 @@ import matplotlib.colors as mcolors
 import matplotlib.cm as cm
 from datetime import datetime
 from pyfaidx import Fasta
+from typing import List, Set
 
 # Load Gencode GTF and create a database
 def create_db(gtf_file, db_name="gencode_mm10.db"):
@@ -597,7 +598,6 @@ def plot_isoforms(
     plt.savefig(filename, format="pdf")
     print(f"Plot saved to {filename}!")
 
-
 def get_intervals_not_overlapped_by_exons(region_start, region_end, exons):
     """
     Given a genomic region and a list of exon intervals, return the intervals within the region
@@ -639,3 +639,59 @@ def get_intervals_not_overlapped_by_exons(region_start, region_end, exons):
         result.append((current_pos, region_end))
 
     return result
+
+def extract_unique_transcripts(juncs: pd.DataFrame) -> List[str]:
+    """
+    Extract unique transcripts from all transcript-related columns in junction DataFrame.
+    Handles string lists, NA values, and ensures uniqueness.
+    
+    Args:
+        juncs: DataFrame containing junction data with transcript columns
+        
+    Returns:
+        List of unique transcript IDs
+    """
+    # Columns to extract transcripts from
+    transcript_columns = [
+        "both_ends_transcripts", 
+        "only_5_prime_transcripts", 
+        "only_3_prime_transcripts", 
+        "perfect_match_5_prime", 
+        "perfect_match_3_prime"
+    ]
+    
+    # Set to store unique transcripts
+    all_transcripts: Set[str] = set()
+    
+    # Process each column
+    for column in transcript_columns:
+        if column not in juncs.columns:
+            print(f"Warning: Column '{column}' not found in DataFrame")
+            continue
+            
+        # Process each row in the column
+        for value in juncs[column]:
+            # Skip NA/None values
+            if pd.isna(value) or value == 'NA' or value is None:
+                continue
+                
+            # Handle string lists (comma-separated values)
+            if isinstance(value, str):
+                # Skip empty strings
+                if value.strip() == '':
+                    continue
+                    
+                # Split by comma and add each transcript to the set
+                for transcript in value.split(','):
+                    transcript = transcript.strip()
+                    if transcript and transcript != 'NA':
+                        all_transcripts.add(transcript)
+            
+            # Handle actual Python lists
+            elif isinstance(value, list):
+                for transcript in value:
+                    if transcript and not pd.isna(transcript) and transcript != 'NA':
+                        all_transcripts.add(str(transcript))
+    
+    # Convert set to sorted list for consistent output
+    return sorted(list(all_transcripts))

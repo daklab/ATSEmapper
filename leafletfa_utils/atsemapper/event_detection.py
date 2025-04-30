@@ -30,7 +30,7 @@ class ATSEAnalyzer:
             if not j_data['gene_ids']:
                 stats['excluded_no_gene'] += 1
                 continue
-            gene_id = j_data['gene_ids'][0]
+            gene_id = j_data['gene_ids'][0] # # Only takes the first gene ID
             gene_groups[gene_id][j_id] = j_data
             stats['included_junctions'] += 1
 
