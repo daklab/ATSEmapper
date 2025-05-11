@@ -149,90 +149,16 @@ class ATSEAnalyzer:
 
         return junction_info
         
-    def sample_unincluded_junctions(self, graphs: Dict[str, nx.Graph], included_junctions: set, sample_size: int = 500) -> List[Dict]:
-        """
-        Sample unincluded junctions and verify they don't share splice sites.
-        Returns list of any problematic cases found.
-        """
-        all_unincluded = []
-        for gene_id, G in graphs.items():
-            gene_junctions = {data['junction_id'] for _, _, data in G.edges(data=True)}
-            unincluded = gene_junctions - included_junctions
-            all_unincluded.extend((gene_id, j_id) for j_id in unincluded)
-
-        # Sample junctions
-        if len(all_unincluded) > sample_size:
-            sampled = random.sample(all_unincluded, sample_size)
-        else:
-            sampled = all_unincluded
-
-        problematic = []
-
-        # Check each sampled junction
-        for gene_id, junction_id in sampled:
-            G = graphs[gene_id]
-
-            # Get junction's splice sites
-            current_donor = None
-            current_acceptor = None
-            for u, v, data in G.edges(data=True):
-                if data['junction_id'] == junction_id:
-                    current_donor = u[1]  # Just the coordinate
-                    current_acceptor = v[1]
-                    break
-                
-            if current_donor is None or current_acceptor is None:
-                print(f"Warning: Could not find coordinates for {junction_id}")
-                continue
-            
-            # Check all other junctions in the same gene
-            for u, v, data in G.edges(data=True):
-                other_id = data['junction_id']
-                if other_id != junction_id:
-                    other_donor = u[1]
-                    other_acceptor = v[1]
-
-                    # Check for exact coordinate matches
-                    if (current_donor == other_donor or 
-                        current_donor == other_acceptor or
-                        current_acceptor == other_donor or 
-                        current_acceptor == other_acceptor):
-
-                        # For debugging, print the exact match found
-                        problematic.append({
-                            'gene_id': gene_id,
-                            'junction_id': junction_id,
-                            'junction_coords': (current_donor, current_acceptor),
-                            'shares_site_with': other_id,
-                            'other_coords': (other_donor, other_acceptor),
-                            'shared_coord': current_donor if (current_donor == other_donor or current_donor == other_acceptor) else current_acceptor
-                        })
-
-        if problematic:
-            print("\nDetailed analysis of problematic cases:")
-            for case in problematic[:5]:
-                print(f"\nJunction: {case['junction_id']} ({case['junction_coords']})")
-                print(f"Shares with: {case['shares_site_with']} ({case['other_coords']})")
-                print(f"Shared coordinate: {case['shared_coord']}")
-
-        return problematic
-    
-    def find_atse_groups(self, graphs: Dict[str, nx.Graph], min_splice_site_usage: float = 0.01) -> Dict[str, Dict]:
+    def find_atse_groups(self, graphs: Dict[str, nx.Graph], min_splice_site_usage: float = 0.01) -> Tuple[Dict[str, Dict], Dict]:
         """
         Find alternative transcript splicing events (ATSEs) with splice site usage filtering.
-    
-        Args:
-            graphs: Dictionary of gene graphs
-            min_splice_site_usage: Minimum proportion of reads a junction must have at a splice site
-                               compared to total reads at that site (default: 0.01 or 1%)
-    
-        Returns:
-            Dictionary of ATSE groups and sorted counts
+        Returns dictionary with renamed ATSEs (gene_id_atse_1, etc.) and event counts.
         """
-        atse_groups = {}
+        # Use temporary naming during discovery, will rename later
+        temp_atse_groups = {}
         event_counter = 0
         filtered_junctions = 0  # Track filtered junctions
-    
+
         # Statistics tracking
         stats = {
             'total_junctions': sum(G.number_of_edges() for G in graphs.values()),
@@ -240,7 +166,9 @@ class ATSEAnalyzer:
             'junctions_in_atses': set(),
             'junction_counts': defaultdict(int),
             'singleton_junctions': [],  # Store info about singleton junctions
-            'filtered_junctions': []    # Track junctions filtered due to low splice site usage
+            'filtered_junctions': [],   # Track junctions filtered due to low splice site usage
+            'split_atses': 0,          # Track how many original ATSEs were split
+            'component_breakdown': defaultdict(int)  # Track component sizes after splitting
         }
 
         # First count analyzable junctions
@@ -275,7 +203,7 @@ class ATSEAnalyzer:
                                     'score': data['score'],
                                     'strand': data['strand']
                                     }
-                        
+
                         # Calculate total reads at each splice site
                         site_total_reads = defaultdict(int)
                         for j_id, j_data in junction_data.items():
@@ -308,7 +236,7 @@ class ATSEAnalyzer:
                                 'donor_total_reads': site_total_reads[j_data['donor']],
                                 'acceptor_total_reads': site_total_reads[j_data['acceptor']]
                             }
-                        
+
                             # If either the donor or acceptor usage is too low, filter out the junction
                             if donor_usage < min_splice_site_usage or acceptor_usage < min_splice_site_usage:
                                 filtered_out.add(j_id)
@@ -323,41 +251,79 @@ class ATSEAnalyzer:
                                     'acceptor_total_reads': site_total_reads[j_data['acceptor']],
                                     'junction_reads': j_data['score']
                                 })
-                    
+
                         # Remove filtered junctions
                         filtered_connected = connected - filtered_out
                         filtered_junctions += len(filtered_out)
 
-                        # Only create an ATSE if at least 2 junctions remain after filtering
+                        # Check connectivity and split into separate ATSEs if needed
                         if len(filtered_connected) >= 2:
-                            event_id = f"ATSE_{event_counter}"
-                        
-                            # Recalculate splice sites based on filtered junctions
-                            filtered_splice_sites = set()
+                            # Create a temporary subgraph with only the remaining junctions
+                            temp_edges = []
                             for j_id in filtered_connected:
-                                filtered_splice_sites.add(junction_data[j_id]['donor'])
-                                filtered_splice_sites.add(junction_data[j_id]['acceptor'])
+                                for u, v, data in G.edges(data=True):
+                                    if data['junction_id'] == j_id:
+                                        temp_edges.append((u, v, data))
 
-                            stats['junction_counts'][len(filtered_connected)] += 1
-                            stats['junctions_in_atses'].update(filtered_connected)
+                            sub_G = nx.Graph()
+                            for u, v, data in temp_edges:
+                                sub_G.add_edge(u, v, **data)
 
-                            atse_groups[event_id] = {
-                                'gene_id': gene_id,
-                                'junction_ids': list(filtered_connected),
-                                'num_junctions': len(filtered_connected),
-                                'splice_sites': list(filtered_splice_sites),
-                                'filtered_junctions': list(filtered_out),
-                                'junction_usage': {j_id: junction_usage[j_id] for j_id in filtered_connected}
-                            }
-                            event_counter += 1
+                            # Find all connected components in the subgraph
+                            components = list(nx.connected_components(sub_G))
+
+                            # Track if this ATSE was split
+                            if len(components) > 1:
+                                stats['split_atses'] += 1
+
+                            # Process each connected component separately
+                            for component in components:
+                                # Find junctions in this component
+                                component_junctions = []
+                                for u, v, data in sub_G.edges(data=True):
+                                    if u in component or v in component:
+                                        component_junctions.append(data['junction_id'])
+
+                                # Only create ATSE if component has ≥2 junctions
+                                if len(component_junctions) >= 2:
+                                    # Use temporary IDs for now
+                                    temp_event_id = f"TEMP_ATSE_{event_counter}"
+
+                                    # Calculate splice sites for this component
+                                    component_splice_sites = set()
+                                    for j_id in component_junctions:
+                                        component_splice_sites.add(junction_data[j_id]['donor'])
+                                        component_splice_sites.add(junction_data[j_id]['acceptor'])
+
+                                    stats['junction_counts'][len(component_junctions)] += 1
+                                    stats['junctions_in_atses'].update(component_junctions)
+                                    stats['component_breakdown'][len(component_junctions)] += 1
+
+                                    temp_atse_groups[temp_event_id] = {
+                                        'gene_id': gene_id,
+                                        'junction_ids': list(component_junctions),
+                                        'num_junctions': len(component_junctions),
+                                        'splice_sites': list(component_splice_sites),
+                                        'filtered_junctions': list(filtered_out),
+                                        'junction_usage': {j_id: junction_usage[j_id] for j_id in component_junctions},
+                                        'original_group_size': len(connected),
+                                        'was_split': len(components) > 1
+                                    }
+                                    event_counter += 1
+                                else:
+                                    # Component has only 1 junction - add as singleton
+                                    for j_id in component_junctions:
+                                        singleton_info = self.analyze_singleton_junctions(G, j_id)
+                                        singleton_info['gene_id'] = gene_id
+                                        stats['singleton_junctions'].append(singleton_info)
                         else:
-                            # Add the remaining junctions as singletons if they don't form an ATSE anymore
+                            # Not enough junctions after filtering - convert to singletons
                             for j_id in filtered_connected:
                                 singleton_info = self.analyze_singleton_junctions(G, j_id)
                                 singleton_info['gene_id'] = gene_id
                                 stats['singleton_junctions'].append(singleton_info)
 
-                        # Mark all junctions as visited
+                        # Mark all original junctions as visited
                         visited.update(connected)
                     else:
                         # This is a singleton junction
@@ -366,13 +332,14 @@ class ATSEAnalyzer:
                         stats['singleton_junctions'].append(singleton_info)
                         visited.add(junction_id)
 
+        # NOW CLASSIFY, RENAME, AND REORGANIZE ATSEs
+        print("Classifying and renaming ATSEs...")
+        final_atse_groups, event_counts = self.classify_events(graphs, temp_atse_groups)
+
         # Calculate final statistics
-        total_atses = len(atse_groups)
+        total_atses = len(final_atse_groups)
         junctions_used = len(stats['junctions_in_atses'])
         singleton_count = len(stats['singleton_junctions'])
-    
-        # Perform sanity check on sample of unincluded junctions
-        problematic = self.sample_unincluded_junctions(graphs, stats['junctions_in_atses'])
 
         # Write singleton information to file
         with open('singleton_junctions.tsv', 'w') as f:
@@ -394,36 +361,67 @@ class ATSEAnalyzer:
                        f"{j['acceptor_total_reads']}\t{j['acceptor_usage']:.4f}\t"
                        f"{j['five_prime_usage']:.4f}\t{j['three_prime_usage']:.4f}\n")
 
+        # Print comprehensive summary
         print(f"""
-                ATSE Analysis Summary:
-                ---------------------
-                Total junctions in dataset: {stats['total_junctions']}
-                Analyzable junctions (in genes with ≥2 junctions): {stats['analyzable_junctions']}
-                Junctions filtered due to low splice site usage (<{min_splice_site_usage*100:.1f}%): {filtered_junctions}
-                Junctions included in ATSEs: {junctions_used}
-                Singleton junctions: {singleton_count}
-                Total ATSEs found: {total_atses}
+        ATSE Analysis Summary:
+        ---------------------
+        Total junctions in dataset: {stats['total_junctions']}
+        Analyzable junctions (in genes with ≥2 junctions): {stats['analyzable_junctions']}
+        Junctions filtered due to low splice site usage (<{min_splice_site_usage*100:.1f}%): {filtered_junctions}
+        Junctions included in ATSEs: {junctions_used}
+        Singleton junctions: {singleton_count}
+        Total ATSEs found: {total_atses}
 
-                ATSE Size Distribution:
-                ----------------------""")
+        ATSE Splitting Statistics:
+        -------------------------
+        Original ATSEs that were split: {stats['split_atses']}
+
+        ATSE Size Distribution:
+        ----------------------""")
 
         sorted_counts = dict(sorted(stats['junction_counts'].items()))
         for num_junctions, count in sorted_counts.items():
             print(f"ATSEs with {num_junctions} junctions: {count}")
 
-        if problematic:
-            print(f"\nWARNING: Found {len(problematic)} potentially problematic cases in random sampling")
-            print("First few examples:")
-            for case in problematic[:5]:
-                print(f"Junction {case['junction_id']} in gene {case['gene_id']} shares site with {case['shares_site_with']}")
-        else:
-            print("\nRandom sampling verification: OK - no shared splice sites found in sampled junctions")
+        print(f"\nEvent Type Distribution:")
+        print(f"  Alternative 3' splice site: {event_counts['alternative_3_prime']}")
+        print(f"  Alternative 5' splice site: {event_counts['alternative_5_prime']}")  
+        print(f"  Exon skipping: {event_counts['exon_skip']}")
+        print(f"  Complex (multiple sites): {event_counts['complex']}")
+
+        print(f"\nComponent size breakdown after splitting:")
+        for size, count in sorted(stats['component_breakdown'].items()):
+            print(f"Components with {size} junctions: {count}")
+
+        # Generate and print gene summary
+        gene_summaries = self.summarize_gene_atses(final_atse_groups)
+
+        print(f"\nGene ATSE Summary:")
+        print(f"Genes with ATSEs: {len(gene_summaries)}")
+
+        # Show distribution of ATSEs per gene
+        atses_per_gene = [summary['total_atses'] for summary in gene_summaries.values()]
+        if atses_per_gene:
+            print(f"Average ATSEs per gene: {sum(atses_per_gene)/len(atses_per_gene):.1f}")
+            print(f"Max ATSEs in a gene: {max(atses_per_gene)}")
+            print(f"Genes with only 1 ATSE: {atses_per_gene.count(1)}")
+            print(f"Genes with >5 ATSEs: {len([x for x in atses_per_gene if x > 5])}")
 
         print(f"\nDetails of filtered junctions saved to 'filtered_low_usage_junctions.tsv'")
 
-        return atse_groups, sorted_counts
-        
+        return final_atse_groups, event_counts
+
+
     def classify_events(self, graphs: Dict[str, nx.Graph], atse_groups: Dict[str, Dict]):
+        """
+        Classify ATSE events based on splice patterns detectable from split reads.
+
+        Event types we can reliably detect:
+        - Alternative 5' splice site
+        - Alternative 3' splice site  
+        - Exon skipping
+        - Complex (multiple donor and acceptor sites)
+        """
         # Initialize counter for event types
         event_counts = {
             'alternative_3_prime': 0,
@@ -432,51 +430,49 @@ class ATSEAnalyzer:
             'complex': 0
         }
 
+        # Group ATSEs by gene for ordering
+        atses_by_gene = defaultdict(list)
+
         for event_id, group in atse_groups.items():
-            G = graphs[group['gene_id']]
+            gene_id = group['gene_id']
+            G = graphs[gene_id]
+
+            # Get ATSE range and strand information
+            atse_start, atse_end, chromosome = self.get_atse_genomic_range(G, group['junction_ids'])
+
+            # Get strand from first junction
+            strand = None
+            for j_id in group['junction_ids']:
+                for _, _, data in G.edges(data=True):
+                    if data['junction_id'] == j_id:
+                        strand = data['strand']
+                        break
+                if strand:
+                    break
+                
+            # Add genomic position info
+            group['chromosome'] = chromosome
+            group['atse_start'] = atse_start
+            group['atse_end'] = atse_end
+            group['strand'] = strand
+            group['atse_length'] = atse_end - atse_start
+
+            # Get strand-aware start position for ordering
+            group['strand_aware_start'] = self.get_atse_start_position(G, group['junction_ids'], strand)
 
             # Count unique donor and acceptor sites
             donor_sites = len([s for s in group['splice_sites'] if s[2] == 'donor'])
             acceptor_sites = len([s for s in group['splice_sites'] if s[2] == 'acceptor'])
+            num_junctions = len(group['junction_ids'])
 
-            # Need a window on how far the alternative splice sites are 
+            # Classify the event type
             if donor_sites == 1 and acceptor_sites > 1:
                 group['event_type'] = 'alternative_3_prime'
             elif donor_sites > 1 and acceptor_sites == 1:
                 group['event_type'] = 'alternative_5_prime'
-            elif len(group['junction_ids']) == 3:
-                # Get junction coordinates and strand
-                junc_coords = []
-                strand = None
-                for j_id in group['junction_ids']:
-                    for u, v, data in G.edges(data=True):
-                        if data['junction_id'] == j_id:
-                            coord1, coord2 = u[1], v[1]
-                            strand = u[2]  # Get strand from node tuple (assuming format: (gene_id, position, strand))
-                            junc_coords.append((coord1, coord2))
-                            break
-                        
-                # Sort junctions based on start position, accounting for strand
-                if strand == '+':
-                    # For positive strand, smaller coordinate is start
-                    junc_coords.sort(key=lambda x: min(x))
-                else:
-                    # For negative strand, larger coordinate is start
-                    junc_coords.sort(key=lambda x: -max(x))
-
-                # Check for exon skipping by comparing starts and ends based on strand
-                is_exon_skip = False
-                if strand == '+':
-                    # Positive strand: compare smallest coordinates for starts, largest for ends
-                    if (min(junc_coords[0]) == min(junc_coords[1]) and  # J1 start == J2 start
-                        max(junc_coords[1]) == max(junc_coords[2])):    # J2 end == J3 end
-                        is_exon_skip = True
-                else:
-                    # Negative strand: compare largest coordinates for starts, smallest for ends
-                    if (max(junc_coords[0]) == max(junc_coords[1]) and  # J1 start == J2 start
-                        min(junc_coords[1]) == min(junc_coords[2])):    # J2 end == J3 end
-                        is_exon_skip = True
-
+            elif num_junctions == 3:
+                # Check for exon skipping pattern
+                is_exon_skip = self._check_exon_skipping(G, group['junction_ids'], strand)
                 group['event_type'] = 'exon_skip' if is_exon_skip else 'complex'
             else:
                 group['event_type'] = 'complex'
@@ -484,16 +480,185 @@ class ATSEAnalyzer:
             # Update counter
             event_counts[group['event_type']] += 1
 
-        return atse_groups, event_counts
-    
+            # Group by gene for renaming
+            atses_by_gene[gene_id].append((group['strand_aware_start'], event_id, group))
+
+        # Reorganize ATSEs with new naming scheme
+        reorganized_atses = {}
+
+        for gene_id, gene_atses in atses_by_gene.items():
+            # Sort ATSEs within gene by strand-aware position
+            strand = gene_atses[0][2]['strand'] if gene_atses else '+'
+
+            if strand == '+':
+                # Positive strand: sort by increasing coordinate
+                gene_atses.sort(key=lambda x: x[0])
+            else:
+                # Negative strand: sort by decreasing coordinate
+                gene_atses.sort(key=lambda x: x[0], reverse=True)
+
+            # Rename ATSEs within gene
+            for i, (_, old_event_id, group) in enumerate(gene_atses, 1):
+                new_event_id = f"{gene_id}_atse_{i}"
+
+                # Add relative position information
+                group['atse_number'] = i
+                group['total_atses_in_gene'] = len(gene_atses)
+
+                # Add distance to neighboring ATSEs
+                if i > 1:
+                    prev_atse = gene_atses[i-2][2]
+                    group['distance_to_previous'] = abs(group['strand_aware_start'] - prev_atse['strand_aware_start'])
+                else:
+                    group['distance_to_previous'] = None
+
+                if i < len(gene_atses):
+                    next_atse = gene_atses[i][2]
+                    group['distance_to_next'] = abs(group['strand_aware_start'] - next_atse['strand_aware_start'])
+                else:
+                    group['distance_to_next'] = None
+
+                reorganized_atses[new_event_id] = group
+
+        return reorganized_atses, event_counts
+
+    def _check_exon_skipping(self, G: nx.Graph, junction_ids: List[str], strand: str) -> bool:
+        """
+        Check if three junctions form an exon skipping pattern.
+
+        Pattern: Junction A (start-end), Junction B (start-middle), Junction C (middle-end)
+        Where "middle" represents the boundaries of the skipped exon.
+        """
+        if len(junction_ids) != 3:
+            return False
+
+        # Get junction coordinates
+        junc_coords = []
+        for j_id in junction_ids:
+            for u, v, data in G.edges(data=True):
+                if data['junction_id'] == j_id:
+                    coord1, coord2 = u[1], v[1]
+                    if strand == '+':
+                        start, end = min(coord1, coord2), max(coord1, coord2)
+                    else:
+                        start, end = max(coord1, coord2), min(coord1, coord2)
+                    junc_coords.append((start, end, j_id))
+                    break
+                
+        # Sort junctions by their start coordinate (considering strand)
+        junc_coords.sort(key=lambda x: x[0] if strand == '+' else -x[0])
+
+        # Check for exon skipping pattern
+        # We need: J1(A-C), J2(A-B), J3(B-C) where B is the skipped exon
+        for i in range(len(junc_coords)):
+            for j in range(len(junc_coords)):
+                for k in range(len(junc_coords)):
+                    if i == j or j == k or i == k:
+                        continue
+                    
+                    j1_start, j1_end, _ = junc_coords[i]
+                    j2_start, j2_end, _ = junc_coords[j]
+                    j3_start, j3_end, _ = junc_coords[k]
+
+                    # Check if we have the pattern: J1 spans, J2 and J3 define boundaries
+                    if strand == '+':
+                        if (j1_start == j2_start and j1_end == j3_end and j2_end == j3_start):
+                            return True
+                    else:
+                        if (j1_end == j2_end and j1_start == j3_start and j2_start == j3_end):
+                            return True
+
+        return False
+
+    def get_atse_genomic_range(self, graph: nx.Graph, junction_ids: List[str]) -> Tuple[int, int, str]:
+        """
+        Get the genomic range (start, end) of an ATSE and its chromosome.
+
+        Returns:
+            Tuple of (start, end, chromosome) where start < end regardless of strand
+        """
+        coordinates = []
+        chromosome = None
+
+        for j_id in junction_ids:
+            for u, v, data in graph.edges(data=True):
+                if data['junction_id'] == j_id:
+                    coord1, coord2 = u[1], v[1]
+                    chromosome = u[0]
+                    coordinates.extend([coord1, coord2])
+                    break
+                
+        if not coordinates:
+            return 0, 0, ""
+
+        return min(coordinates), max(coordinates), chromosome
+
+    def get_atse_start_position(self, graph: nx.Graph, junction_ids: List[str], strand: str) -> int:
+        """
+        Get the strand-aware start position of an ATSE.
+
+        For positive strand: returns leftmost coordinate
+        For negative strand: returns rightmost coordinate
+        """
+        coordinates = []
+
+        for j_id in junction_ids:
+            for u, v, data in graph.edges(data=True):
+                if data['junction_id'] == j_id:
+                    coordinates.extend([u[1], v[1]])
+                    break
+                
+        if not coordinates:
+            return 0
+
+        if strand == '+':
+            return min(coordinates)
+        else:
+            return max(coordinates)
+
+
+    def summarize_gene_atses(self, atse_groups: Dict[str, Dict]) -> Dict[str, Dict]:
+        """
+        Create a summary of ATSEs per gene with their relative positions.
+        """
+        gene_summaries = defaultdict(lambda: {
+            'total_atses': 0,
+            'event_types': defaultdict(int),
+            'atses': [],
+            'gene_atse_range': None
+        })
+
+        for event_id, group in atse_groups.items():
+            gene_id = group['gene_id']
+            summary = gene_summaries[gene_id]
+
+            summary['total_atses'] += 1
+            summary['event_types'][group['event_type']] += 1
+            summary['atses'].append({
+                'event_id': event_id,
+                'event_number': group.get('atse_number', 0),
+                'start': group.get('atse_start', 0),
+                'end': group.get('atse_end', 0),
+                'event_type': group['event_type'],
+                'num_junctions': group['num_junctions']
+            })
+
+            # Update gene range
+            if summary['gene_atse_range'] is None:
+                summary['gene_atse_range'] = [group.get('atse_start', 0), group.get('atse_end', 0)]
+            else:
+                summary['gene_atse_range'][0] = min(summary['gene_atse_range'][0], group.get('atse_start', 0))
+                summary['gene_atse_range'][1] = max(summary['gene_atse_range'][1], group.get('atse_end', 0))
+
+        # Convert defaultdict to regular dict and calculate span
+        for gene_id, summary in gene_summaries.items():
+            if summary['gene_atse_range']:
+                summary['gene_atse_span'] = summary['gene_atse_range'][1] - summary['gene_atse_range'][0]
+        return dict(gene_summaries)
+
     def save_atse_file(self, atse_groups: Dict[str, Dict], junctions: Dict[str, Dict], file_name: str):
         """
-        Save ATSE groups to a tab-delimited file with gzip compression, including junction annotations.
-
-        Args:
-            atse_groups: Dictionary of ATSE events
-            junctions: Dictionary of junction annotations
-            file_name: Output file path (will append .gz if not present)
+        Save ATSE groups to a tab-delimited file with gzip compression, including positional information.
         """
         import gzip
         from collections import defaultdict
@@ -504,16 +669,19 @@ class ATSEAnalyzer:
         if not file_name.endswith('.gz'):
             file_name = file_name + '.gz'
 
-        # Define column groups to make the code more maintainable
+        # Define column groups with positional information
         event_columns = [
             "event_id", "gene_id", "gene_name", "gene_types",
-            "num_junctions", "event_type"
+            "num_junctions", "event_type", "chromosome", "strand",
+            "atse_start", "atse_end", "atse_length",
+            "atse_number", "total_atses_in_gene",
+            "distance_to_previous", "distance_to_next"
         ]
-    
+
         transcript_columns = [
             "transcripts", "both_ends_transcripts", "only_5_prime_transcripts", 
             "only_3_prime_transcripts", "transcript_types", "annotation_status",
-            "perfect_match_5_prime", "perfect_match_3_prime"  # Added new fields
+            "perfect_match_5_prime", "perfect_match_3_prime"
         ]
 
         junction_columns = [
@@ -538,12 +706,12 @@ class ATSEAnalyzer:
 
         # Track statistics
         stats = defaultdict(int)
-    
+
         try:
-            with gzip.open(file_name, 'wt') as f:  # 'wt' for write text mode
+            with gzip.open(file_name, 'wt') as f:
                 # Write header
                 f.write("\t".join(all_columns) + "\n")
-    
+
                 # Write data
                 for event_id, group in atse_groups.items():
                     # Verify all required fields are present
@@ -555,7 +723,7 @@ class ATSEAnalyzer:
                     
                     # Get junction usage data if available
                     junction_usage = group.get('junction_usage', {})
-    
+
                     try:
                         # For each junction in the ATSE
                         for junction_id in group['junction_ids']:
@@ -566,64 +734,75 @@ class ATSEAnalyzer:
                             
                             j_data = junctions[junction_id]
                             stats["junctions_written"] += 1
-    
+
                             # Prepare row data
                             row_data = {}
-                            
-                            # Event data
+
+                            # Event data with positional information
                             row_data["event_id"] = event_id
                             row_data["gene_id"] = group['gene_id']
-                            
-                            # Handle gene names - join with pipe if multiple names exist
+
+                            # Handle gene names
                             gene_names = j_data.get('gene_names', [])
                             row_data["gene_name"] = '|'.join(str(name) for name in gene_names) if gene_names else 'NA'
-                            
+
                             # Handle gene types
                             gene_types = j_data.get('gene_types', [])
                             row_data["gene_types"] = '|'.join(str(gtype) for gtype in gene_types) if gene_types else 'NA'
-                            
+
                             row_data["num_junctions"] = group['num_junctions']
                             row_data["event_type"] = group['event_type']
-                            
+
+                            # Add positional information
+                            row_data["chromosome"] = group.get('chromosome', 'NA')
+                            row_data["strand"] = group.get('strand', 'NA')
+                            row_data["atse_start"] = group.get('atse_start', 'NA')
+                            row_data["atse_end"] = group.get('atse_end', 'NA')
+                            row_data["atse_length"] = group.get('atse_length', 'NA')
+                            row_data["atse_number"] = group.get('atse_number', 'NA')
+                            row_data["total_atses_in_gene"] = group.get('total_atses_in_gene', 'NA')
+                            row_data["distance_to_previous"] = group.get('distance_to_previous', 'NA')
+                            row_data["distance_to_next"] = group.get('distance_to_next', 'NA')
+
                             # Transcript data
                             for field in ["transcripts", "both_ends_transcripts", "only_5_prime_transcripts", 
                                          "only_3_prime_transcripts", "perfect_match_5_prime", "perfect_match_3_prime"]:
                                 values = j_data.get(field, [])
                                 row_data[field] = ','.join(str(t) for t in values) if values else 'NA'
-                            
+
                             # Transcript types
                             transcript_types = j_data.get('transcript_types', [])
                             row_data["transcript_types"] = ','.join(str(t) for t in transcript_types) if transcript_types else 'NA'
-                            
+
                             row_data["annotation_status"] = j_data.get('annotation_status', 'NA')
-                            
+
                             # Junction data
                             row_data["junction_id"] = junction_id
                             for field in ["chrom", "start", "end", "strand", "cells", "total_score"]:
                                 row_data[field] = j_data.get(field, 'NA')
-                            
+
                             # Usage data
                             usage_data = junction_usage.get(junction_id, {})
                             for field in ["five_prime_usage", "three_prime_usage", "donor_usage", "acceptor_usage"]:
                                 value = usage_data.get(field, 'NA')
                                 row_data[field] = f"{value:.4f}" if isinstance(value, float) else 'NA'
-                            
+
                             # Total reads data
                             for field in ["donor_total_reads", "acceptor_total_reads"]:
                                 value = usage_data.get(field, 'NA')
                                 row_data[field] = f"{value}" if isinstance(value, (int, float)) else 'NA'
-                            
+
                             # Sequence data
                             for field in ["splice_motif", "donor_seq", "acceptor_seq"]:
                                 row_data[field] = j_data.get(field, 'NA')
-                            
+
                             # Position data
                             for field in ["position_off_5_prime", "position_off_3_prime"]:
                                 row_data[field] = j_data.get(field, 'NA')
-                            
+
                             # Write the row
                             f.write("\t".join(str(row_data.get(col, 'NA')) for col in all_columns) + "\n")
-                            
+
                     except Exception as e:
                         print(f"Warning: Error writing event {event_id}: {str(e)}")
                         stats["write_errors"] += 1
@@ -638,7 +817,7 @@ class ATSEAnalyzer:
                 print(f"Skipped {stats['missing_junctions']} junctions not found in annotations")
             if stats["write_errors"] > 0:
                 print(f"Encountered {stats['write_errors']} errors while writing events")
-        
+
         except IOError as e:
             print(f"Error: Could not write to file {file_name}: {str(e)}")
             raise
