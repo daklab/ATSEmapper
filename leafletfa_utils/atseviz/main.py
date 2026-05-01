@@ -56,7 +56,9 @@ def convert_junction_ids(df):
                 "end": int(end),
                 "name": f"junction_{idx + 1}",
                 "strand": strand,
-                "usage_ratio": row["usage_ratio"],  # Add usage_ratio to each junction dictionary
+                "usage_ratio": row["usage_ratio"],
+                "gene_id": row.get("gene_id", "unknown_gene"),
+                "gene_name": row.get("gene_name", row.get("gene_id", "unknown_gene")),
             }
         )
     return splice_junctions
@@ -113,15 +115,10 @@ def plot_exons_and_junctions(
         "Junction": False,
     }
 
-    # Retrieve gene information from the first transcript
-    first_transcript_id = next(iter(transcript_data.values()))["transcript_id"]
-    gene = next(db.parents(first_transcript_id, featuretype="gene"))
-
-    gene_id = gene.id
-    gene_name = gene.attributes.get("gene_name", [gene_id])[
-        0
-    ]  # Use gene ID if no name is found
-    gene_strand = gene.strand
+    # Extract gene metadata from first junction
+    gene_id = splice_junctions[0]["gene_id"]
+    gene_name = splice_junctions[0]["gene_name"]
+    gene_strand = splice_junctions[0]["strand"]
 
     # Plot each transcript's exons, CDS, and introns
     for transcript_id, transcript in sorted_transcripts:
