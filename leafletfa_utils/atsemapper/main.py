@@ -216,22 +216,16 @@ def run_atsemapper(args=None):
     gene_graphs, graph_stats = atse_analyzer.build_splice_graph(annotation_filtered)
     
     logging.info("Finding ATSE groups")
-    atse_groups, junction_counts = atse_analyzer.find_atse_groups(
+    atse_groups = atse_analyzer.find_atse_groups(
         gene_graphs, min_splice_site_usage=args.min_splice_site_usage
     )
     logging.info(f"Found {len(atse_groups)} ATSE groups")
-    
-    # Classify events
-    logging.info("Classifying ATSE events")
-    classified_events, event_counts = atse_analyzer.classify_events(gene_graphs, atse_groups)
-    for event_type, count in event_counts.items():
-        logging.info(f"  {event_type}: {count}")
-    
+
     # Save results
     today = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     output_file = os.path.join(args.output, f"atse_events_{today}.tsv.gz")
     logging.info(f"Saving ATSE events to {output_file}")
-    atse_analyzer.save_atse_file(classified_events, annotation_filtered, output_file)    
+    atse_analyzer.save_atse_file(atse_groups, annotation_filtered, output_file)    
     logging.info("ATSEmapper completed successfully")
     return output_file
 

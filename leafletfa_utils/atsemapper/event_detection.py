@@ -332,9 +332,8 @@ class ATSEAnalyzer:
                         stats['singleton_junctions'].append(singleton_info)
                         visited.add(junction_id)
 
-        # NOW CLASSIFY, RENAME, AND REORGANIZE ATSEs
-        print("Classifying and renaming ATSEs...")
-        final_atse_groups, event_counts = self.classify_events(graphs, temp_atse_groups)
+        # RENAME AND REORGANIZE ATSEs by gene position
+        final_atse_groups = self._finalize_atse_groups(graphs, temp_atse_groups)
 
         # Calculate final statistics
         total_atses = len(final_atse_groups)
@@ -383,12 +382,6 @@ class ATSEAnalyzer:
         for num_junctions, count in sorted_counts.items():
             print(f"ATSEs with {num_junctions} junctions: {count}")
 
-        print(f"\nEvent Type Distribution:")
-        print(f"  Alternative 3' splice site: {event_counts['alternative_3_prime']}")
-        print(f"  Alternative 5' splice site: {event_counts['alternative_5_prime']}")  
-        print(f"  Exon skipping: {event_counts['exon_skip']}")
-        print(f"  Complex (multiple sites): {event_counts['complex']}")
-
         print(f"\nComponent size breakdown after splitting:")
         for size, count in sorted(stats['component_breakdown'].items()):
             print(f"Components with {size} junctions: {count}")
@@ -409,38 +402,18 @@ class ATSEAnalyzer:
 
         print(f"\nDetails of filtered junctions saved to 'filtered_low_usage_junctions.tsv'")
 
-        return final_atse_groups, event_counts
+        return final_atse_groups
 
-
-    def classify_events(self, graphs: Dict[str, nx.Graph], atse_groups: Dict[str, Dict]):
-        """
-        Classify ATSE events based on splice patterns detectable from split reads.
-
-        Event types we can reliably detect:
-        - Alternative 5' splice site
-        - Alternative 3' splice site  
-        - Exon skipping
-        - Complex (multiple donor and acceptor sites)
-        """
-        # Initialize counter for event types
-        event_counts = {
-            'alternative_3_prime': 0,
-            'alternative_5_prime': 0,
-            'exon_skip': 0,
-            'complex': 0
-        }
-
-        # Group ATSEs by gene for ordering
+    def _finalize_atse_groups(self, graphs: Dict[str, nx.Graph], atse_groups: Dict[str, Dict]) -> Dict[str, Dict]:
+        """Rename ATSEs with gene-based IDs ordered by strand-aware genomic position."""
         atses_by_gene = defaultdict(list)
 
         for event_id, group in atse_groups.items():
             gene_id = group['gene_id']
             G = graphs[gene_id]
 
-            # Get ATSE range and strand information
             atse_start, atse_end, chromosome = self.get_atse_genomic_range(G, group['junction_ids'])
 
-            # Get strand from first junction
             strand = None
             for j_id in group['junction_ids']:
                 for _, _, data in G.edges(data=True):
@@ -449,126 +422,43 @@ class ATSEAnalyzer:
                         break
                 if strand:
                     break
-                
-            # Add genomic position info
+
             group['chromosome'] = chromosome
             group['atse_start'] = atse_start
             group['atse_end'] = atse_end
             group['strand'] = strand
             group['atse_length'] = atse_end - atse_start
-
-            # Get strand-aware start position for ordering
             group['strand_aware_start'] = self.get_atse_start_position(G, group['junction_ids'], strand)
 
-            # Count unique donor and acceptor sites
-            donor_sites = len([s for s in group['splice_sites'] if s[2] == 'donor'])
-            acceptor_sites = len([s for s in group['splice_sites'] if s[2] == 'acceptor'])
-            num_junctions = len(group['junction_ids'])
-
-            # Classify the event type
-            if donor_sites == 1 and acceptor_sites > 1:
-                group['event_type'] = 'alternative_3_prime'
-            elif donor_sites > 1 and acceptor_sites == 1:
-                group['event_type'] = 'alternative_5_prime'
-            elif num_junctions == 3:
-                # Check for exon skipping pattern
-                is_exon_skip = self._check_exon_skipping(G, group['junction_ids'], strand)
-                group['event_type'] = 'exon_skip' if is_exon_skip else 'complex'
-            else:
-                group['event_type'] = 'complex'
-
-            # Update counter
-            event_counts[group['event_type']] += 1
-
-            # Group by gene for renaming
             atses_by_gene[gene_id].append((group['strand_aware_start'], event_id, group))
 
-        # Reorganize ATSEs with new naming scheme
         reorganized_atses = {}
 
         for gene_id, gene_atses in atses_by_gene.items():
-            # Sort ATSEs within gene by strand-aware position
             strand = gene_atses[0][2]['strand'] if gene_atses else '+'
-
             if strand == '+':
-                # Positive strand: sort by increasing coordinate
                 gene_atses.sort(key=lambda x: x[0])
             else:
-                # Negative strand: sort by decreasing coordinate
                 gene_atses.sort(key=lambda x: x[0], reverse=True)
 
-            # Rename ATSEs within gene
-            for i, (_, old_event_id, group) in enumerate(gene_atses, 1):
+            for i, (_, _, group) in enumerate(gene_atses, 1):
                 new_event_id = f"{gene_id}_atse_{i}"
-
-                # Add relative position information
                 group['atse_number'] = i
                 group['total_atses_in_gene'] = len(gene_atses)
 
-                # Add distance to neighboring ATSEs
                 if i > 1:
-                    prev_atse = gene_atses[i-2][2]
-                    group['distance_to_previous'] = abs(group['strand_aware_start'] - prev_atse['strand_aware_start'])
+                    group['distance_to_previous'] = abs(group['strand_aware_start'] - gene_atses[i-2][2]['strand_aware_start'])
                 else:
                     group['distance_to_previous'] = None
 
                 if i < len(gene_atses):
-                    next_atse = gene_atses[i][2]
-                    group['distance_to_next'] = abs(group['strand_aware_start'] - next_atse['strand_aware_start'])
+                    group['distance_to_next'] = abs(group['strand_aware_start'] - gene_atses[i][2]['strand_aware_start'])
                 else:
                     group['distance_to_next'] = None
 
                 reorganized_atses[new_event_id] = group
 
-        return reorganized_atses, event_counts
-
-    def _check_exon_skipping(self, G: nx.Graph, junction_ids: List[str], strand: str) -> bool:
-        """
-        Check if three junctions form an exon skipping pattern.
-
-        Pattern: Junction A (start-end), Junction B (start-middle), Junction C (middle-end)
-        Where "middle" represents the boundaries of the skipped exon.
-        """
-        if len(junction_ids) != 3:
-            return False
-
-        # Get junction coordinates
-        junc_coords = []
-        for j_id in junction_ids:
-            for u, v, data in G.edges(data=True):
-                if data['junction_id'] == j_id:
-                    coord1, coord2 = u[1], v[1]
-                    if strand == '+':
-                        start, end = min(coord1, coord2), max(coord1, coord2)
-                    else:
-                        start, end = max(coord1, coord2), min(coord1, coord2)
-                    junc_coords.append((start, end, j_id))
-                    break
-                
-        # Sort junctions by their start coordinate (considering strand)
-        junc_coords.sort(key=lambda x: x[0] if strand == '+' else -x[0])
-
-        # Check for exon skipping pattern
-        # We need: J1(A-C), J2(A-B), J3(B-C) where B is the skipped exon
-        for i in range(len(junc_coords)):
-            for j in range(len(junc_coords)):
-                for k in range(len(junc_coords)):
-                    if i == j or j == k or i == k:
-                        continue
-                    
-                    j1_start, j1_end, _ = junc_coords[i]
-                    j2_start, j2_end, _ = junc_coords[j]
-                    j3_start, j3_end, _ = junc_coords[k]
-
-                    # Check if we have the pattern: J1 spans, J2 and J3 define boundaries
-                    if strand == '+':
-                        if (j1_start == j2_start and j1_end == j3_end and j2_end == j3_start):
-                            return True
-                    else:
-                        if (j1_end == j2_end and j1_start == j3_start and j2_start == j3_end):
-                            return True
-
-        return False
+        return reorganized_atses
 
     def get_atse_genomic_range(self, graph: nx.Graph, junction_ids: List[str]) -> Tuple[int, int, str]:
         """
@@ -623,7 +513,6 @@ class ATSEAnalyzer:
         """
         gene_summaries = defaultdict(lambda: {
             'total_atses': 0,
-            'event_types': defaultdict(int),
             'atses': [],
             'gene_atse_range': None
         })
@@ -633,13 +522,11 @@ class ATSEAnalyzer:
             summary = gene_summaries[gene_id]
 
             summary['total_atses'] += 1
-            summary['event_types'][group['event_type']] += 1
             summary['atses'].append({
                 'event_id': event_id,
                 'event_number': group.get('atse_number', 0),
                 'start': group.get('atse_start', 0),
                 'end': group.get('atse_end', 0),
-                'event_type': group['event_type'],
                 'num_junctions': group['num_junctions']
             })
 
@@ -663,7 +550,7 @@ class ATSEAnalyzer:
         import gzip
         from collections import defaultdict
 
-        required_fields = {'gene_id', 'num_junctions', 'event_type', 'junction_ids'}
+        required_fields = {'gene_id', 'num_junctions', 'junction_ids'}
 
         # Ensure file has .gz extension
         if not file_name.endswith('.gz'):
@@ -672,7 +559,7 @@ class ATSEAnalyzer:
         # Define column groups with positional information
         event_columns = [
             "event_id", "gene_id", "gene_name", "gene_types",
-            "num_junctions", "event_type", "chromosome", "strand",
+            "num_junctions", "chromosome", "strand",
             "atse_start", "atse_end", "atse_length",
             "atse_number", "total_atses_in_gene",
             "distance_to_previous", "distance_to_next"
@@ -751,7 +638,6 @@ class ATSEAnalyzer:
                             row_data["gene_types"] = '|'.join(str(gtype) for gtype in gene_types) if gene_types else 'NA'
 
                             row_data["num_junctions"] = group['num_junctions']
-                            row_data["event_type"] = group['event_type']
 
                             # Add positional information
                             row_data["chromosome"] = group.get('chromosome', 'NA')
