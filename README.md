@@ -47,7 +47,7 @@ pip install -e ATSEmapper
 pip install -e /path/to/ATSEmapper
 ```
 
-The `-e` flag installs in editable mode — `leafletfa_utils` becomes importable anywhere in your environment and any code changes are immediately live without reinstalling.
+The `-e` flag installs in editable mode — `atsemapper` becomes importable anywhere in your environment and any code changes are immediately live without reinstalling.
 
 This installs one CLI command: `atsemapper`.
 
@@ -77,7 +77,7 @@ atsemapper \
 #### Python API
 
 ```python
-from leafletfa_utils.atsemapper.main import run_atsemapper
+from atsemapper.atsemapper.main import run_atsemapper
 
 class Args:
     input = "path/to/junction/files"
@@ -170,7 +170,7 @@ See [examples/visualization_examples/visualize_atses.ipynb](examples/visualizati
 
 ```python
 import gffutils
-from leafletfa_utils.atseviz.main import (
+from atsemapper.atseviz.main import (
     plot_exons_and_junctions,
     plot_isoforms,
     fetch_transcripts_and_annotations,

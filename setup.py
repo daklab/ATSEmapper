@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="leafletfa_utils",
+    name="atsemapper",
     version="0.1.0",
     packages=find_packages(),
     install_requires=[
@@ -16,7 +16,7 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'atsemapper=leafletfa_utils.atsemapper.main:main',
+            'atsemapper=atsemapper.atsemapper.main:main',
         ],
     },
     author="Karin Isaev",

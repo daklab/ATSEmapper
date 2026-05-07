@@ -7,7 +7,7 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Import LeafletFA utils module for ATSEmapper
-from leafletfa_utils.atsemapper.main import run_atsemapper
+from atsemapper.atsemapper.main import run_atsemapper
 
 # =================================================================
 # STEP 1: Set up file paths
