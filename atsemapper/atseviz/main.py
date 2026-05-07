@@ -1,3 +1,4 @@
+import os
 import gffutils
 import numpy as np
 import matplotlib.pyplot as plt
@@ -692,3 +693,75 @@ def extract_unique_transcripts(juncs: pd.DataFrame) -> List[str]:
     
     # Convert set to sorted list for consistent output
     return sorted(list(all_transcripts))
+
+
+def visualize_atse_event(atse_event, atse_df, db, species="human",
+                         output_dir=None, padding=5000, base_width=10,
+                         trans_height=1, show_usage=False, show_junc_lines=False,
+                         filter_ensembl_transcripts=True):
+    """
+    Visualize a single ATSE event: plot its junctions and overlapping transcripts.
+
+    Args:
+        atse_event: event_id string to visualize
+        atse_df: DataFrame of ATSE output from ATSEmapper
+        db: gffutils.FeatureDB annotation database
+        species: "human" or "mouse" (used for output filename)
+        output_dir: directory to save the PDF; None = current directory
+        padding: bp to add on each side of the plotted region
+        base_width: figure width
+        trans_height: vertical spacing per transcript
+        show_usage: colour junctions by usage ratio
+        show_junc_lines: draw vertical lines at junction boundaries
+        filter_ensembl_transcripts: keep only ENST/ENSMUST transcript IDs
+    """
+    juncs = atse_df[atse_df["event_id"] == atse_event].copy()
+
+    if juncs.empty:
+        print(f"No junctions found for event: {atse_event}")
+        return None
+
+    if "total_score" in juncs.columns:
+        juncs["usage_ratio"] = juncs["total_score"] / juncs["total_score"].sum()
+    juncs["Cluster"] = juncs["event_id"]
+
+    splice_junctions = convert_junction_ids(juncs)
+    unique_transcripts = extract_unique_transcripts(juncs)
+
+    if not unique_transcripts:
+        print(f"No transcripts found for event: {atse_event}")
+        return None
+
+    if filter_ensembl_transcripts:
+        unique_transcripts = [t for t in unique_transcripts if t.startswith(("ENST", "ENSMUST"))]
+
+    transcript_data = fetch_transcripts_and_annotations(db, unique_transcripts)
+
+    if not transcript_data:
+        print(f"No transcript data retrieved for event: {atse_event}")
+        return None
+
+    region_start, region_end = determine_region_boundaries(splice_junctions)
+
+    if output_dir:
+        gene_name = juncs["gene_name"].iloc[0] if "gene_name" in juncs.columns else "unknown"
+        timestamp = datetime.now().strftime("%H%M%S")
+        filename = os.path.join(output_dir, f"{timestamp}_{species}_{gene_name}_{atse_event}.pdf")
+    else:
+        filename = None
+
+    plot_exons_and_junctions(
+        db, atse_event, transcript_data, splice_junctions,
+        region_start - padding, region_end + padding,
+        base_width=base_width, trans_height=trans_height,
+        show_usage=show_usage, show_junc_lines=show_junc_lines,
+        filename=filename
+    )
+
+    return {
+        "junctions": juncs,
+        "splice_junctions": splice_junctions,
+        "transcript_data": transcript_data,
+        "gene_name": juncs["gene_name"].iloc[0] if "gene_name" in juncs.columns else "unknown",
+        "filename": filename
+    }
