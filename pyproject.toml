@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atsemapper"
+version = "0.1.0"
+description = "Utility modules for mapping and visualizing alternative splicing events in single cells or bulk RNA-seq data."
+authors = [{ name = "Karin Isaev", email = "karin.isaev@gmail.com" }]
+keywords = ["bioinformatics", "single-cell", "RNA-seq", "alternative splicing"]
+requires-python = ">=3.8"
+dependencies = [
+    "pandas",
+    "numpy",
+    "networkx",
+    "matplotlib",
+    "seaborn",
+    "pyfaidx",
+    "gffutils",
+    "tqdm",
+]
+
+[project.urls]
+Repository = "https://github.com/yourusername/ATSEmapper"
+
+[project.scripts]
+atsemapper = "atsemapper.atsemapper.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
