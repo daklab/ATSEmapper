@@ -1,3 +1,9 @@
+# Large genome/reference files — generate with examples/setup_sample_data.sh
+examples/sample_data/chr19.fa
+examples/sample_data/chr19.fa.fai
+examples/sample_data/chr19.gtf
+examples/sample_data/*.db
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -175,3 +181,8 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# demo output
+examples/output/
+# default output folders and side files of runs started from the repo root
+LeafletFA_ATSE_mapper_output_*/

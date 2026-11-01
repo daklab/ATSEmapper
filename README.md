@@ -32,7 +32,8 @@ regtools junctions extract -s 0 sample.bam -o sample.junctions.bed
 - Each file corresponds to one sample (bulk RNA-seq or single-cell)
 - Optimized for bulk RNA-seq and plate-based single-cell data
 - Input can be a directory of `.bed`/`.junc` files or a `.txt` file listing paths (one per line)
-- 10X Genomics (multi-cell BAM) support is under development
+- 10x Genomics data are **not supported** in this release: 3'/5' capture measures few internal junctions, and
+  multi-cell BAMs are not parsed. Use full-length protocols (Smart-seq2/3) or bulk RNA-seq.
 
 ### Installation
 
@@ -139,7 +140,27 @@ ATSEmapper writes a compressed TSV to the output directory:
 
 Each row is an alternative splicing event with junction coordinates, gene annotation, and splice site usage.
 
+Three side files are written to the same directory: `singleton_junctions.tsv` (junctions that form no alternative
+event), `filtered_low_usage_junctions.tsv` (junctions removed by `--min-splice-site-usage`) and
+`multi_gene_junctions_<timestamp>.csv` (junctions annotated to more than one gene).
+
+### Known limitation: singleton junctions are dropped
+
+An ATSE is a group of junctions that share a splice site, so a junction that shares no splice site with any other
+junction (a "singleton") forms no event and is not counted. This removes junctions that are real but constitutive in
+the data, including highly expressed ones (for example most junctions of *COL1A1*). The singletons of a run are listed
+in `singleton_junctions.tsv`. ATSEmapper therefore describes alternative usage, not total junction coverage.
+
 ### Example
+
+A self-contained demo (20 Tabula Muris Senis Smart-seq2 cells, chr19):
+
+```bash
+bash examples/setup_sample_data.sh --download   # chr19 GTF + FASTA (or set GENOME_GTF / GENOME_FASTA to local files)
+bash examples/run_example.sh                     # demo + unit tests; outputs in examples/output/
+```
+
+On your own data:
 
 ```bash
 atsemapper \
@@ -193,8 +214,8 @@ plot_isoforms(db, transcript_data, region_start, region_end, transcript_order=tr
 If you use ATSEmapper in your research, please cite:
 
 ```
-Isaev et al. (2025). LeafletFA: A comprehensive framework for alternative splicing analysis
-from single cell RNA-seq data. Journal Name. DOI: 10.xxxx/xxxxx
+Isaev et al. LeafletFA (manuscript submitted, 2026). ATSEmapper and LeafletFA
+(https://github.com/daklab/LeafletFA) form one toolkit: ATSEmapper defines and counts events, LeafletFA models them.
 ```
 
 ## Contributing
