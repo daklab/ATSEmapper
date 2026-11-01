@@ -207,7 +207,7 @@ def run_atsemapper(args=None):
     
     # Filter based on annotation status
     logging.info(f"Filtering junctions based on annotation status: {args.annotation_status}")
-    annotation_filtered = analyzer.filter_annotated(annotated_junctions, args.annotation_status)
+    annotation_filtered = analyzer.filter_annotated(annotated_junctions, args.annotation_status, out_dir=args.output)
     logging.info(f"After annotation filtering: {len(annotation_filtered)} junctions remain")
     
     # Build splice graphs and find ATSEs
@@ -217,7 +217,7 @@ def run_atsemapper(args=None):
     
     logging.info("Finding ATSE groups")
     atse_groups = atse_analyzer.find_atse_groups(
-        gene_graphs, min_splice_site_usage=args.min_splice_site_usage
+        gene_graphs, min_splice_site_usage=args.min_splice_site_usage, out_dir=args.output
     )
     logging.info(f"Found {len(atse_groups)} ATSE groups")
 

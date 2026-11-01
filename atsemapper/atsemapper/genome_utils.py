@@ -330,7 +330,8 @@ class JunctionAnalyzer:
 
         return junctions
     
-    def filter_annotated(self, junctions: Dict[str, Dict], annotation_status_include: str = 'both') -> Dict[str, Dict]:
+    def filter_annotated(self, junctions: Dict[str, Dict], annotation_status_include: str = 'both',
+                         out_dir: str = ".") -> Dict[str, Dict]:
         """
         Filter junctions based on annotation status.
 
@@ -405,7 +406,7 @@ class JunctionAnalyzer:
 
         # Save multi-gene junctions to file
         if multi_gene_junctions:
-            multi_gene_file = f'multi_gene_junctions_{time.strftime("%Y%m%d-%H%M%S")}.csv'
+            multi_gene_file = os.path.join(out_dir, f'multi_gene_junctions_{time.strftime("%Y%m%d-%H%M%S")}.csv')
             pd.DataFrame.from_dict(multi_gene_junctions, orient='index').to_csv(multi_gene_file)
             print(f"\nMulti-gene junctions saved to {multi_gene_file}")
 

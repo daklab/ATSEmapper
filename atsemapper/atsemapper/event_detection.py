@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import random
 import logging
 import networkx as nx # type: ignore
@@ -149,7 +150,8 @@ class ATSEAnalyzer:
 
         return junction_info
         
-    def find_atse_groups(self, graphs: Dict[str, nx.Graph], min_splice_site_usage: float = 0.01) -> Tuple[Dict[str, Dict], Dict]:
+    def find_atse_groups(self, graphs: Dict[str, nx.Graph], min_splice_site_usage: float = 0.01,
+                         out_dir: str = ".") -> Tuple[Dict[str, Dict], Dict]:
         """
         Find alternative transcript splicing events (ATSEs) with splice site usage filtering.
         Returns dictionary with renamed ATSEs (gene_id_atse_1, etc.) and event counts.
@@ -341,7 +343,7 @@ class ATSEAnalyzer:
         singleton_count = len(stats['singleton_junctions'])
 
         # Write singleton information to file
-        with open('singleton_junctions.tsv', 'w') as f:
+        with open(os.path.join(out_dir, 'singleton_junctions.tsv'), 'w') as f:
             # Write header
             f.write('gene_id\tjunction_id\tchromosome\tdonor_site\tacceptor_site\tstrand\tread_count\n')
             # Write data
@@ -350,7 +352,7 @@ class ATSEAnalyzer:
                        f"{j['acceptor_site']}\t{j['strand']}\t{j['score']}\n")
 
         # Write filtered junction information to file
-        with open('filtered_low_usage_junctions.tsv', 'w') as f:
+        with open(os.path.join(out_dir, 'filtered_low_usage_junctions.tsv'), 'w') as f:
             # Write header
             f.write('gene_id\tjunction_id\tjunction_reads\tdonor_total_reads\tdonor_usage\tacceptor_total_reads\tacceptor_usage\t5prime_usage\t3prime_usage\n')
             # Write data
@@ -400,7 +402,7 @@ class ATSEAnalyzer:
             print(f"Genes with only 1 ATSE: {atses_per_gene.count(1)}")
             print(f"Genes with >5 ATSEs: {len([x for x in atses_per_gene if x > 5])}")
 
-        print(f"\nDetails of filtered junctions saved to 'filtered_low_usage_junctions.tsv'")
+        print(f"\nDetails of filtered junctions saved to '{os.path.join(out_dir, 'filtered_low_usage_junctions.tsv')}'")
 
         return final_atse_groups
 
