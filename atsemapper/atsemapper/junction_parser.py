@@ -20,7 +20,8 @@ class JunctionReader:
         self.max_intron = max_intron
         self.sequencing_type = sequencing_type
         self.dtypes = {0: str, 1: 'int32', 2: 'int32', 3: str, 4: 'int32', 5: str,
-                      6: 'int32', 7: 'int32', 8: str, 9: 'int32', 10: str, 11: str}
+                      6: 'int32', 7: 'int32', 8: str, 9: 'int32', 10: str, 11: str,
+                      12: 'int32', 13: str}
         self.batch_size = batch_size
         self.min_cells = min_cells
         self.min_reads = min_reads
@@ -42,7 +43,7 @@ class JunctionReader:
 
             col_names = ["chrom", "chromStart", "chromEnd", "name", "score", "strand",
                         "thickStart", "thickEnd", "itemRgb", "blockCount", "blockSizes", "blockStarts"]
-            if self.sequencing_type == "single_cell":
+            if self.sequencing_type in ("single_cell", "smart_seq"):
                 col_names += ["num_cells_wjunc", "cell_readcounts"]
             juncs.columns = col_names[:len(juncs.columns)]
 
